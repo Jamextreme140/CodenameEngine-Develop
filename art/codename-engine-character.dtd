@@ -1,0 +1,29 @@
+<!ELEMENT character (anim*)>
+<!ATTLIST character 
+    x NMTOKEN "0"
+    y NMTOKEN "0"
+    sprite CDATA #IMPLIED
+    isPlayer (true|false) "false"
+    scale NMTOKEN #IMPLIED
+    camx NMTOKEN "0"
+    camy NMTOKEN "0"
+    flipX (true|false) "false"
+    antialiasing (true|false) "true"
+    gameoverChar CDATA #IMPLIED
+    icon CDATA #IMPLIED
+    color CDATA #IMPLIED
+    holdTime NMTOKEN #IMPLIED
+>
+
+<!ELEMENT anim (#PCDATA)>
+<!ATTLIST anim 
+    name CDATA #REQUIRED
+    anim CDATA #REQUIRED
+    indices CDATA #IMPLIED
+    type (beat|loop) #IMPLIED
+    fps NMTOKEN "24"
+    x NMTOKEN #IMPLIED
+    y NMTOKEN #IMPLIED
+    forces (true|false) #IMPLIED
+    loop (true|false) "false"
+>
