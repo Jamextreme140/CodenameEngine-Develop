@@ -16,6 +16,7 @@ import haxe.xml.Access;
 
 using StringTools;
 
+//@:deprecated typedef Stage = funkin.game.stage.Stage;
 /**
  * A class that handles loading a stage and putting the sprites into the state.
 **/
@@ -401,6 +402,7 @@ class Stage extends FlxBasic implements IBeatReceiver {
 	}
 }
 
+//@:deprecated typedef StageCharPos = funkin.game.stage.Stage.StageCharPos;
 class StageCharPos extends FlxObject {
 	public var extra:Map<String, Dynamic> = [];
 
@@ -476,6 +478,7 @@ class StageCharPos extends FlxObject {
 		oldInfo = null;
 	}
 }
+//@:deprecated typedef StageCharPosInfo = funkin.game.stage.Stage.StageCharPosInfo;
 typedef StageCharPosInfo = {
 	var x:Float;
 	var y:Float;
@@ -483,6 +486,7 @@ typedef StageCharPosInfo = {
 	var scroll:Float;
 }
 
+//@:deprecated typedef OldCharInfo = funkin.game.stage.Stage.OldCharInfo;
 typedef OldCharInfo = {
 	var x:Float;
 	var y:Float;
