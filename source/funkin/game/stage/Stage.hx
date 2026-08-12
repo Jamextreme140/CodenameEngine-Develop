@@ -846,8 +846,7 @@ class Stage extends Layer {
 			}
 
 			if (sprite != null) {
-				if(sprite is FlxSprite)
-					i++;
+				i++;
 				for (e in node.nodes.property)
 					XMLUtil.applyXMLProperty(sprite, e);
 			}
