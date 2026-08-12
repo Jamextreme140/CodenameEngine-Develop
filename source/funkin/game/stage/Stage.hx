@@ -62,8 +62,10 @@ class LayerGroup extends FlxTypedGroup<FlxSprite> {
 	@:access(flixel.FlxSprite)
 	public function drawMembers(camera:FlxCamera, parentMatrix:FlxMatrix, ?transform:ColorTransform, ?blend:BlendMode, ?antialiasing:Bool, ?shader:FlxShader) {
 		for(member in members) {
-			if(member is Layer) {
 
+			if(member is Layer) {
+				var layer:Layer = cast member;
+				layer.drawLayer(camera);
 			}
 			else {
 				member.drawComplex(camera);
@@ -627,10 +629,10 @@ class Stage extends Layer {
 	public var onNodeInitalize:(Access)->Dynamic = null;
 	public var onNodeLoaded:(Access, Dynamic)->Dynamic = null;
 	public var onNodeFinished:(Access, Dynamic)->Void = null;
-	public var onXMLPostLoaded:(Access, Array<Access>)->Array<Access> = null;
+	public var onXMLPostLoaded:(Access, Access)->Access = null;
 
 	public var onStartCamSet:FlxPoint -> Float -> Void;
-	public var onRatingSet:Float->Float->FlxBasic;
+	public var onRatingSet:Float->Float->FlxSprite;
 	
 	public var onStageDestroy:Stage -> Void;
 	public var onSilentDestroy:Script -> Void;
@@ -699,22 +701,18 @@ class Stage extends Layer {
 		// Load custom attributes
 		loadCustomAttributes();
 
-		// TODO: use a more streamlined way to set the nodes
-		var elems:Array<Access> = [];
-		var data:Access = new Access(Xml.createElement(xmlFile.name));
-		@:privateAccess for(a => v in xmlFile.x.attributeMap) data.x.set(a, v);
-
-		// some way to tag that the sprites are from the group
-		checkMemoryMode(xmlFile, loadAll, elems);
+		var data:Access = new Access(Xml.parse(xmlFile.x.toString()));
+		// streamlined way to tag that the sprites are from the group
+		checkMemoryMode(data, loadAll);
 
 		if (onXMLLoaded != null) {
-			//stageEvent = EventManager.get(StageXMLEvent).recycle(this, xmlFile, elems);
-			//elems = onXMLLoaded(stageEvent);
+			//stageEvent = EventManager.get(StageXMLEvent).recycle(this, xmlFile, data);
+			//data = onXMLLoaded(stageEvent);
 		}
 		
-		//loadLayer(this, elems);
+		loadLayer(this, data);
 
-		postLoadStage(elems);
+		//postLoadStage(elems);
 		script?.call("postCreate");
 		script?.call("onPostStageLoad");
 		hasLoaded = true;
@@ -725,37 +723,26 @@ class Stage extends Layer {
 	}
 
 	//region Memory Mode Filtering
-	@:dox(hide) private function checkMemoryMode(xml:Access, loadAll:Bool, elems:Array<Access>) {
+	@:dox(hide) private function checkMemoryMode(xml:Access, loadAll:Bool) {
 		for(node in xml.elements) {
-			if (node.name == "high-memory" && (!Options.lowMemoryMode || loadAll))
-				for (e in node.elements) pushNode(e, elems);
-			else if (node.name == "low-memory" && (Options.lowMemoryMode || loadAll))
-				for (e in node.elements) pushNode(e, elems);
-			else if (node.name == "layer") {
-				var layerElems:Array<Access> = [];
-				checkMemoryMode(node, loadAll, layerElems); // recursive filter in layers
-				var layerNode:Access = nodeFromElements(node, layerElems);
-				pushNode(layerNode, elems);
+			switch(node.name) {
+				case 'high-memory':
+					if(Options.lowMemoryMode || !loadAll) {
+						xml.x.removeChild(node.x);
+						continue;
+					}
+				case 'low-memory':
+					if(!Options.lowMemoryMode || !loadAll) {
+						xml.x.removeChild(node.x);
+						continue;
+					}
+				case 'layer':
+					checkMemoryMode(node, loadAll); // recursive filter in layers
 			}
-			else pushNode(node, elems);
-		}
-	}
 
-	@:dox(hide) private function nodeFromElements(parentNode:Access, elems:Array<Access>):Access {
-		var n:Xml = Xml.createElement(parentNode.name);
-		@:privateAccess {
-			for(a => v in parentNode.x.attributeMap) 
-				n.set(a, v);
-			for(e in elems)
-				n.addChild(e.x); // maybe use something different since adding a child changes their parent node internally - Jamextreme140
+			if (__isExtensionNode(node) && XMLImportedScriptInfo.shouldLoadBefore(node))
+				if (onPrepareInfo != null) onPrepareInfo(node);
 		}
-		return new Access(n);
-	}
-
-	@:dox(hide) private function pushNode(node:Access, elems:Array<Access>) {
-		elems.push(node);
-		if (__isExtensionNode(node) && XMLImportedScriptInfo.shouldLoadBefore(node))
-			if (onPrepareInfo != null) onPrepareInfo(node);
 	}
 	//endregion
 
@@ -772,17 +759,27 @@ class Stage extends Layer {
 	}
 
 	private function loadLayer(layer:Layer, data:Access) {
-		// TODO
-		var it = data.elements;
-		for(node in it) {
+		var i:Int = 0; // local index count for Character setting
+		for(node in data.elements) {
 			// If `onNodeInitalize` returns a valid value, then why waste time on checking other values, 
 			// since we should only care about what the user sets it too. Optimizations be like:
 			var sprite:Dynamic = (onNodeInitalize != null) ? onNodeInitalize(node) : null;
 			if(sprite == null) {
 				sprite = switch(node.name) {
 					case 'layer':
-						// TODO
-						null;
+						if (!node.has.name) continue;
+
+						var layerName:String = node.att.name;
+						var renderLayer:Bool = node.has.useRenderTexture ? node.att.useRenderTexture == "true" : false;
+						var new_layer:Layer = new Layer(layerName, renderLayer);
+						// recursive so it will allow nested layers
+						script?.call("onLoadLayer", [new_layer]);
+
+						loadLayer(new_layer, node);
+						layer.add(new_layer);
+					
+						script?.call("onPostLoadLayer", [new_layer]);
+						new_layer;
 					case "sprite" | "spr" | "sparrow":
 						if (!node.has.name) continue;
 
@@ -810,22 +807,24 @@ class Stage extends Layer {
 						node.x.remove("height");
 						node.x.remove("color");
 						XMLUtil.loadSpriteFromXML(spr, node, "", NONE, false);
-
 						layer.addSprite(spr.name, spr);
 					case "boyfriend" | "bf" | "player":
-						setCharPos("boyfriend", node, getDefaultPos("boyfriend"), layer);
+						setCharPos("boyfriend", node, getDefaultPos("boyfriend"), layer, i);
 					case "girlfriend" | "gf":
-						setCharPos("girlfriend", node, getDefaultPos("girlfriend"), layer);
+						setCharPos("girlfriend", node, getDefaultPos("girlfriend"), layer, i);
 					case "dad" | "opponent":
-						setCharPos("dad", node, getDefaultPos("dad"), layer);
+						setCharPos("dad", node, getDefaultPos("dad"), layer, i);
 					case "character" | "char":
 						if (!node.has.name)
 							continue;
-						setCharPos(node.att.name, node, null, layer);
+						setCharPos(node.att.name, node, null, layer, i);
 					case "ratings" | "combo":
 						if (onRatingSet == null)
 							continue;
 						onRatingSet(Std.parseFloat(node.getAtt("x")), Std.parseFloat(node.getAtt("y")));
+					case 'high-memory' | 'low-memory':
+						loadLayer(layer, node);
+						null;
 					default:
 						// moved it to be like this, so we can just update the inline function - LJ
 						if (__isExtensionNode(node))
@@ -847,6 +846,8 @@ class Stage extends Layer {
 			}
 
 			if (sprite != null) {
+				if(sprite is FlxSprite)
+					i++;
 				for (e in node.nodes.property)
 					XMLUtil.applyXMLProperty(sprite, e);
 			}
@@ -857,7 +858,7 @@ class Stage extends Layer {
 		}
 	}
 
-	private function postLoadStage(?elems:Array<Access>) {
+	private function postLoadStage(?data:Array<Access>) {
 		for(defaultChar in ["girlfriend", "dad", "boyfriend"]) {
 			if (!characterPosLookup.exists(defaultChar))
 				setCharPos(defaultChar, null, getDefaultPos(defaultChar), this);
@@ -887,7 +888,7 @@ class Stage extends Layer {
 		}
 
 		if (xmlFile != null && onXMLPostLoaded != null) {
-			elems = onXMLPostLoaded(xmlFile, elems);
+			//data = onXMLPostLoaded(xmlFile, data);
 		}
 	}
 
