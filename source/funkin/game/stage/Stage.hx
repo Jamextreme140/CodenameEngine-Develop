@@ -7,18 +7,16 @@ import flixel.util.FlxColor;
 import flixel.system.FlxAssets.FlxGraphicAsset;
 import animate.internal.RenderTexture;
 
-import funkin.game.Stage.StageCharPos;
-import funkin.game.Stage.StageCharPosInfo;
 import funkin.backend.utils.XMLUtil;
 import funkin.backend.scripting.Script;
 import funkin.backend.scripting.events.stage.StageXMLEvent;
 import funkin.backend.system.interfaces.IBeatReceiver;
 
 import flixel.group.FlxGroup;
+import flixel.group.FlxSpriteGroup;
 import flixel.math.FlxMath;
 import flixel.math.FlxPoint;
 import flixel.math.FlxRect;
-import flixel.math.FlxMatrix;
 import flixel.util.FlxSignal.FlxTypedSignal;
 import flixel.util.FlxStringUtil; 
 import flixel.util.FlxStringUtil.LabelValuePair;
@@ -57,7 +55,7 @@ class LayerGroup extends FlxTypedGroup<FlxSprite> {
 			parentLayer.updateHitbox();
 		});
 	}
-
+	/*
 	@:access(animate.internal.RenderTexture)
 	@:access(flixel.FlxSprite)
 	public function drawMembers(camera:FlxCamera, parentMatrix:FlxMatrix, ?transform:ColorTransform, ?blend:BlendMode, ?antialiasing:Bool, ?shader:FlxShader) {
@@ -72,19 +70,15 @@ class LayerGroup extends FlxTypedGroup<FlxSprite> {
 			}
 		}
 	}
+	*/
 }
 
-class Layer extends FlxSprite implements IBeatReceiver {
+class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
 
 	/**
-	 * The Stage Name
+	 * The Layer Name
 	 */
 	public var name:String;
-
-	/**
-	 * The actual group which holds all sprites in the layer.
-	 */
-	public final group:LayerGroup;
 
 	/**
 	 * Signal that triggers whenever a sprite is added. Similar to `group.memberAdded`, except sprite specific.
@@ -101,25 +95,18 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	 * This flattens all of the sprites and subsequent layers into a single graphic, making effects such as alpha or shaders apply to
 	 * the entire sprite instead of individual members of the group.
 	 */
-	public var useRenderTexture:Bool = false;
-	private var _renderTexture:RenderTexture;
-	private var _renderTextureDirty:Bool = true;
-
-	/**
-	 * Shortcut for `group.members`
-	 */
-	public var members(get, never):Array<FlxSprite>;
+	//public var useRenderTexture:Bool = false;
 
 	/**
 	 * Internal. Used for rendering
 	 */
 	private var _bounds:FlxRect = FlxRect.get();
 
-	public function new(name:String = 'stage_layer', useRenderTexture:Bool = false) {
+	public function new(name:String = 'stage_layer') {
 		super();
 		this.name = name;
-		this.useRenderTexture = useRenderTexture;
-		group = new LayerGroup(this);
+		//this.useRenderTexture = useRenderTexture;
+		this.group = new LayerGroup(this);
 	}
 
 	//region IBeatReceiver implementation
@@ -138,34 +125,46 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	private var stageLayers:Map<String, Layer> = [];
 
 	//region Stage Layer Management
-	public function add(obj:FlxSprite):FlxSprite {
-		if(!(obj is Layer)) return group.add(obj);
+	override function preAdd(Sprite:FlxSprite) {
+		if(Sprite == null) return;
+		// var sprite:FlxSprite = cast Sprite; 
+		Sprite.x += x;
+		Sprite.y += y;
+		Sprite.alpha *= alpha;
+		//sprite.scrollFactor.copyFrom(scrollFactor);
+		Sprite.cameras = _cameras; // _cameras instead of cameras because get_cameras() will not return null
+
+		if (clipRect != null) clipRectTransform(Sprite, clipRect);
+	}
+
+	public override function add(obj:FlxSprite):FlxSprite {
+		if(!(obj is Layer)) return super.add(obj);
 
 		var layer:Layer = cast obj;
 		if (stageLayers.exists(layer.name)) 
 			return stageLayers.get(layer.name);
 
 		stageLayers.set(layer.name, layer);
-		return group.add(layer);
+		return super.add(layer);
 	}
 
-	public function insert(position:Int, obj:FlxSprite):FlxSprite {
-		if(!(obj is Layer)) return group.insert(position, obj);
+	public override function insert(position:Int, obj:FlxSprite):FlxSprite {
+		if(!(obj is Layer)) return super.insert(position, obj);
 
 		var layer:Layer = cast obj;
 		if (stageLayers.exists(layer.name)) 
 			return stageLayers.get(layer.name);
 
 		stageLayers.set(layer.name, layer);
-		return group.insert(position, layer);
+		return super.insert(position, layer);
 	}
 
-	public function remove(obj:FlxSprite, splice:Bool = false):FlxSprite {
-		if(!(obj is Layer)) return group.remove(obj, splice);
+	public override function remove(obj:FlxSprite, splice:Bool = false):FlxSprite {
+		if(!(obj is Layer)) return super.remove(obj, splice);
 
 		var layer:Layer = cast obj;
 		stageLayers.remove(layer.name);
-		return group.remove(layer, splice);
+		return super.remove(layer, splice);
 	}
 	//endregion
 
@@ -208,159 +207,20 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	}
 	//endregion
 
-	//region Drawing 
-
-	// heavily based on flixel-animate.
-	// shoutouts for MaybeMaru for the rendering method :3 - Jamextreme140
-
-	private function checkRenderTexture():Bool {
-		return useRenderTexture && (alpha != 1 || shader != null || (blend != null && blend != NORMAL));
-	}
-
-	override function set_alpha(value:Float) {
-		value = FlxMath.bound(value, 0, 1);
-		if(!checkRenderTexture() && this.alpha != value) 
-			transformMembers((spr) -> {spr.alpha = value;});
-		
-		return this.alpha = value;
-	}
-
-	override function set_blend(blend:BlendMode) {
-		if(!checkRenderTexture())
-			transformMembers((spr) -> {spr.blend = blend;});
-
-		return this.blend = blend;
-	}
-
 	override function draw() {
-		/*
-		if(!checkRenderTexture()) {
-			//super.draw();
-			group.draw();
+		// re-implementing the `onDraw` functionality from `FlxSprite` since `FlxSpriteGroup` didn't have this (it doesn't call `super.draw()`), so we have to add it back in ourselves
+		if (__drawOverrided) {
+			__drawOverrided = false;
+			onDraw(this);
+			__drawOverrided = true;
 			return;
-		} 
-		*/
+		}
 
-		if (alpha <= 0.0 || Math.abs(scale.x) <= 0.0 || Math.abs(scale.y) <= 0.0)
+		if (visible || group.length == 0 || alpha <= 0.0)
 			return;
-		
-		for(cam in #if (flixel >= "5.7.0") this.getCamerasLegacy() #else this.cameras #end) {
-			if (!camera.visible || !camera.exists /*|| !isOnScreen(camera)*/) // TODO: ACTUAL OPTIMIZATION
-				continue;
 
-			drawLayer(cam);
-
-			#if FLX_DEBUG
-			FlxBasic.visibleCount++;
-			#end
-		}
-
-		#if FLX_DEBUG
-		if (FlxG.debugger.drawDebug)
-			drawDebug();
-		#end
+		super.draw();
 	}
-
-	private function drawLayer(cam:FlxCamera) {
-		final willUseRenderTexture = checkRenderTexture();
-		final matrix:FlxMatrix = _matrix;
-		_matrix.identity();
-
-		var bounds:FlxRect = _bounds;
-		if (!willUseRenderTexture)
-			_matrix.translate(-_bounds.x, -_bounds.y);
-
-		prepareLayerMatrix(_matrix, camera, _bounds);
-
-		#if !flash
-		if (willUseRenderTexture) {
-			renderLayer();
-		}
-		else 
-		#end
-		{
-			group.drawMembers(cam, _matrix, colorTransform, blend, antialiasing, shaderEnabled ? shader : null);
-		}
-	}
-
-	#if !flash
-	private inline function renderLayer() {
-		if (_renderTexture == null)
-			_renderTexture = new RenderTexture(Math.ceil(_bounds.width), Math.ceil(_bounds.height));
-
-		_renderTexture.init(Math.ceil(_bounds.width), Math.ceil(_bounds.height));
-		_renderTexture.drawToCamera((camera, matrix) -> {
-			matrix.translate(-_bounds.x, -_bounds.y);
-			group.drawMembers(camera, _matrix, null, null, antialiasing, null);
-			// timeline.draw(camera, matrix, null, null, antialiasing, null);
-		});
-		_renderTexture.render();
-
-		// _renderTextureDirty = false;
-		
-
-		if (layer != null)
-			layer.drawPixels(this, camera, _renderTexture.graphic.imageFrame.frame, framePixels, _matrix, colorTransform, blend, antialiasing,
-				shaderEnabled ? shader : null);
-		else
-			camera.drawPixels(_renderTexture.graphic.imageFrame.frame, framePixels, _matrix, colorTransform, blend, antialiasing, shaderEnabled ? shader : null);
-	}
-	#end
-
-	private function prepareLayerMatrix(matrix:FlxMatrix, camera:FlxCamera, bounds:FlxRect):Void
-	{
-		if (checkFlipX())
-		{
-			matrix.scale(-1, 1);
-			matrix.translate(bounds.width, 0);
-		}
-
-		if (checkFlipY())
-		{
-			matrix.scale(1, -1);
-			matrix.translate(0, bounds.height);
-		}
-
-		prepareDrawMatrix(matrix, camera);
-	}
-
-	private function prepareDrawMatrix(matrix:FlxMatrix, camera:FlxCamera):Void
-	{
-		matrix.translate(-origin.x, -origin.y);
-		
-		if (frameOffsetAngle != null && frameOffsetAngle != angle)
-		{
-			var angleOff = (frameOffsetAngle - angle) * flixel.math.FlxAngle.TO_RAD;
-			var cos = Math.cos(angleOff);
-			var sin = Math.sin(angleOff);
-			// cos doesnt need to be negated
-			_matrix.rotateWithTrig(cos, -sin);
-			_matrix.translate(-frameOffset.x, -frameOffset.y);
-			_matrix.rotateWithTrig(cos, sin);
-		}
-		else
-			_matrix.translate(-frameOffset.x, -frameOffset.y);
-
-		matrix.scale(scale.x, scale.y);
-		
-		if (angle != 0) {
-			updateTrig();
-			matrix.rotateWithTrig(_cosAngle, _sinAngle);
-		}
-
-		getScreenPosition(_point, camera).subtractPoint(offset).add(origin.x, origin.y);
-		matrix.translate(_point.x, _point.y);
-
-		if (isPixelPerfectRender(camera))
-			preparePixelPerfectMatrix(matrix);
-	}
-
-	private inline function preparePixelPerfectMatrix(matrix:FlxMatrix):Void {
-		matrix.tx = Math.floor(matrix.tx);
-		matrix.ty = Math.floor(matrix.ty);
-	}
-
-	//endregion
 
 	/**
 	 * If false, it will check values of `x`, `y`, `width` and `height` of the members directly
@@ -372,8 +232,7 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	override function updateHitbox() {
 		if(group.length == 0) return;
 		if (updateHitboxDirty) {
-			this.x = findMinX();
-			this.y = findMinY();
+			setPosition(findMinX(), findMinY());
 			this.width = findMaxX() - x;
 			this.height = findMaxY() - y;
 		}
@@ -392,7 +251,6 @@ class Layer extends FlxSprite implements IBeatReceiver {
 				if (obj.y + obj.height > maxY) maxY = obj.y + obj.height;
 			}
 
-			//_bounds.set(minX, minY, maxX - minX, maxY - minY);
 			setPosition(minX, minY);
 			setSize(maxX - minX, maxY - minY);
 		}
@@ -405,7 +263,15 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	}
 
 	//region Methods From FlxSpriteGroup
-	private function findMinX():Float {
+	override function get_width():Float {
+		return _bounds.width;
+	}
+
+	override function get_height():Float {
+		return _bounds.height;
+	}
+
+	public override function findMinX():Float {
 		if(group.length == 0) return 0;
 		var value = Math.POSITIVE_INFINITY;
 
@@ -422,7 +288,7 @@ class Layer extends FlxSprite implements IBeatReceiver {
 		return value;
 	}
 
-	private function findMaxX():Float {
+	public override function findMaxX():Float {
 		if(group.length == 0) return 0;
 		var value = Math.NEGATIVE_INFINITY;
 
@@ -439,7 +305,7 @@ class Layer extends FlxSprite implements IBeatReceiver {
 		return value;
 	}
 
-	private function findMinY():Float {
+	public override function findMinY():Float {
 		if(group.length == 0) return 0;
 		var value = Math.POSITIVE_INFINITY;
 
@@ -456,7 +322,7 @@ class Layer extends FlxSprite implements IBeatReceiver {
 		return value;
 	}
 
-	private function findMaxY():Float {
+	public override function findMaxY():Float {
 		if(group.length == 0) return 0;
 		var value = Math.NEGATIVE_INFINITY;
 
@@ -472,6 +338,33 @@ class Layer extends FlxSprite implements IBeatReceiver {
 
 		return value;
 	}
+
+	// We disabled these functions since everything is pre-calculated above
+	override function findMaxXHelper():Float {
+		#if FLX_DEBUG
+		throw "This function is disabled";
+		#end
+		return 0;
+	}
+
+	override function findMaxYHelper():Float {
+		#if FLX_DEBUG
+		throw "This function is disabled";
+		#end
+		return 0;
+	}
+	override function findMinXHelper():Float {
+		#if FLX_DEBUG
+		throw "This function is disabled";
+		#end
+		return 0;
+	}
+	override function findMinYHelper():Float {
+		#if FLX_DEBUG
+		throw "This function is disabled";
+		#end
+		return 0;
+	}
 	//endregion
 
 	private inline function __shouldUpdateBounds(m:FlxSprite):Bool {
@@ -481,10 +374,6 @@ class Layer extends FlxSprite implements IBeatReceiver {
 	override function destroy() {
 		super.destroy();
 		_bounds = FlxDestroyUtil.put(_bounds);
-	}
-
-	private function get_members():Array<FlxSprite> {
-		return group.members;
 	}
 
 	private function transformMembers(func:FlxSprite -> Void) {
@@ -501,85 +390,6 @@ class Layer extends FlxSprite implements IBeatReceiver {
 			LabelValuePair.weak("height", height),
 		])}';
 	}
-
-	//region Disable graphics functionality
-	/**
-	 * This functionality isn't supported in layers
-	 * @return this sprite group
-	 */
-	@:dox(hide) override public function loadGraphicFromSprite(Sprite:FlxSprite):FlxSprite
-	{
-		#if FLX_DEBUG
-		throw "This function is not supported in FlxSpriteGroup";
-		#end
-		return this;
-	}
-
-	/**
-	 * This functionality isn't supported in layers
-	 * @return this sprite group
-	 */
-	@:dox(hide) override public function loadGraphic(Graphic:FlxGraphicAsset, Animated:Bool = false, Width:Int = 0, Height:Int = 0, Unique:Bool = false,
-			?Key:String):FlxSprite
-	{
-		return this;
-	}
-
-	/**
-	 * This functionality isn't supported in layers
-	 * @return this sprite group
-	 */
-	@:dox(hide) override public function loadRotatedGraphic(Graphic:FlxGraphicAsset, Rotations:Int = 16, Frame:Int = -1, AntiAliasing:Bool = false,
-			AutoBuffer:Bool = false, ?Key:String):FlxSprite
-	{
-		#if FLX_DEBUG
-		throw "This function is not supported in FlxSpriteGroup";
-		#end
-		return this;
-	}
-
-	/**
-	 * This functionality isn't supported in layers
-	 * @return this sprite group
-	 */
-	@:dox(hide) override public function makeGraphic(Width:Int, Height:Int, Color:Int = FlxColor.WHITE, Unique:Bool = false, ?Key:String):FlxSprite
-	{
-		#if FLX_DEBUG
-		throw "This function is not supported in FlxSpriteGroup";
-		#end
-		return this;
-	}
-
-	@:dox(hide) override function set_pixels(Value:BitmapData):BitmapData {return Value;}
-
-	@:dox(hide) override function set_frame(Value:FlxFrame):FlxFrame{return Value;}
-
-	@:dox(hide) override function get_pixels():BitmapData {return null;}
-
-	/**
-	 * This functionality isn't supported in layers
-	 *
-	 * @param   force   Whether the frame should also be recalculated if we're on a non-flash target
-	 */
-	@:dox(hide) override inline function calcFrame(RunOnCpp:Bool = false):Void{/* Nothing to do here */}
-
-	/**
-	 * This functionality isn't supported in layers
-	 */
-	@:dox(hide) override inline function resetHelpers():Void {}
-
-	/**
-	 * This functionality isn't supported in layers
-	 */
-	@:dox(hide) override public inline function stamp(Brush:FlxSprite, X:Int = 0, Y:Int = 0):Void {}
-
-	@:dox(hide) override function set_frames(Frames:FlxFramesCollection):FlxFramesCollection {return Frames;}
-
-	/**
-	 * This functionality isn't supported in layers
-	 */
-	@:dox(hide) override inline function updateColorTransform():Void {}
-	//endregion
 }
 
 /**
@@ -588,7 +398,7 @@ class Layer extends FlxSprite implements IBeatReceiver {
  * @author Jamextreme140 & ItsLJCool
 **/
 class Stage extends Layer {
-	private static final DEFAULT_ATTRIBUTES:Array<String> = ["name", "startCamPosX", "startCamPosY", "zoom", "folder", "useRenderTexture"];
+	private static final DEFAULT_ATTRIBUTES:Array<String> = ["name", "startCamPosX", "startCamPosY", "zoom", "folder"];
 
 	private static inline function getDefaultPos(name:String):StageCharPosInfo {
 		return switch(name) {
@@ -687,7 +497,7 @@ class Stage extends Layer {
 		loadStartCam();
 
 		this.name = xmlFile.getAtt("name").getDefault(fileName);
-		this.useRenderTexture = xmlFile.has.useRenderTexture ? xmlFile.att.useRenderTexture == "true" : false;
+		//this.useRenderTexture = xmlFile.has.useRenderTexture ? xmlFile.att.useRenderTexture == "true" : false;
 
 		if (onStartCamSet != null) 
 			onStartCamSet(startCam, defaultZoom);
@@ -716,6 +526,7 @@ class Stage extends Layer {
 		script?.call("postCreate");
 		script?.call("onPostStageLoad");
 		hasLoaded = true;
+		data = null;
 	}
 
 	@:dox(hide) private inline function __isExtensionNode(node:Access):Bool {
@@ -770,8 +581,8 @@ class Stage extends Layer {
 						if (!node.has.name) continue;
 
 						var layerName:String = node.att.name;
-						var renderLayer:Bool = node.has.useRenderTexture ? node.att.useRenderTexture == "true" : false;
-						var new_layer:Layer = new Layer(layerName, renderLayer);
+						//var renderLayer:Bool = node.has.useRenderTexture ? node.att.useRenderTexture == "true" : false;
+						var new_layer:Layer = new Layer(layerName/*, renderLayer*/);
 						// recursive so it will allow nested layers
 						script?.call("onLoadLayer", [new_layer]);
 
