@@ -1,28 +1,21 @@
 package funkin.game.stage;
 
-import flixel.graphics.frames.FlxFramesCollection;
-import flixel.graphics.frames.FlxFrame;
-import openfl.display.BitmapData;
 import flixel.util.FlxColor;
-import flixel.system.FlxAssets.FlxGraphicAsset;
-import animate.internal.RenderTexture;
 
 import funkin.backend.utils.XMLUtil;
 import funkin.backend.scripting.Script;
-import funkin.backend.scripting.events.stage.StageXMLEvent;
+//import funkin.backend.scripting.events.stage.StageXMLEvent;
+import funkin.backend.scripting.events.DynamicEvent; // temporary
 import funkin.backend.system.interfaces.IBeatReceiver;
 
 import flixel.group.FlxGroup;
 import flixel.group.FlxSpriteGroup;
-import flixel.math.FlxMath;
 import flixel.math.FlxPoint;
 import flixel.math.FlxRect;
 import flixel.util.FlxSignal.FlxTypedSignal;
 import flixel.util.FlxStringUtil; 
 import flixel.util.FlxStringUtil.LabelValuePair;
 import flixel.util.FlxDestroyUtil;
-
-import flixel.system.FlxAssets.FlxShader;
 
 import flixel.FlxSprite;
 #if FLX_DEBUG
@@ -32,10 +25,8 @@ import flixel.FlxBasic;
 import haxe.xml.Access;
 import hscript.IHScriptCustomBehaviour;
 
-import openfl.display.BlendMode;
-import openfl.geom.ColorTransform;
-
 using StringTools;
+using funkin.backend.utils.XMLUtil.XMLImportedScriptInfo;
 
 class LayerGroup extends FlxTypedGroup<FlxSprite> {
 	private final parentLayer:Layer;
@@ -45,7 +36,7 @@ class LayerGroup extends FlxTypedGroup<FlxSprite> {
 		super();
 		memberAdded.add((spr) -> {
 			if(spr is Layer)
-				parentLayer.onAddLayer.dispatch(cast(spr, Layer)); // explicit cast just to be sure :3  - Jamextreme140
+				parentLayer.onAddLayer.dispatch(cast spr);
 			else
 				parentLayer.onAddSprite.dispatch(spr);
 
@@ -55,25 +46,14 @@ class LayerGroup extends FlxTypedGroup<FlxSprite> {
 			parentLayer.updateHitbox();
 		});
 	}
-	/*
-	@:access(animate.internal.RenderTexture)
-	@:access(flixel.FlxSprite)
-	public function drawMembers(camera:FlxCamera, parentMatrix:FlxMatrix, ?transform:ColorTransform, ?blend:BlendMode, ?antialiasing:Bool, ?shader:FlxShader) {
-		for(member in members) {
-
-			if(member is Layer) {
-				var layer:Layer = cast member;
-				layer.drawLayer(camera);
-			}
-			else {
-				member.drawComplex(camera);
-			}
-		}
-	}
-	*/
 }
 
-class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
+/**
+ * This is an organizational class that can update and render a bunch of `FlxSprite`s and `Layer`s.
+ * @author Jamextreme140 & ItsLJCool
+ */
+class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver implements IHScriptCustomBehaviour {
+	private static final __instanceFields:Array<String> = Type.getInstanceFields(Layer);
 
 	/**
 	 * The Layer Name
@@ -98,15 +78,24 @@ class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
 	//public var useRenderTexture:Bool = false;
 
 	/**
+	 * Returns the parent layer in the Stage hierarchy.
+	 * WARNING: can be `null`, normally indicating that this is the main layer.
+	 */
+	public final parent:Layer = null;
+
+	/**
 	 * Internal. Used for rendering
 	 */
 	private var _bounds:FlxRect = FlxRect.get();
 
-	public function new(name:String = 'stage_layer') {
+	public function new(name:String = 'stage_layer', ?parent:Layer) {
 		super();
 		this.name = name;
-		//this.useRenderTexture = useRenderTexture;
-		this.group = new LayerGroup(this);
+		this.parent = parent;
+		group = FlxDestroyUtil.destroy(this.group); // get rid of the prev group implementation
+
+		group = new LayerGroup(this);
+		_sprites = cast group.members;
 	}
 
 	//region IBeatReceiver implementation
@@ -204,6 +193,26 @@ class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
 
 	public inline function getLayer(name:String):Null<Layer> {
 		return stageLayers.exists(name) ? stageLayers[name] : null;
+	}
+	//endregion
+
+	//region IHScriptCustomBehaviour implementation
+	public function hget(name:String):Dynamic {
+		if (__instanceFields.contains(name) || __instanceFields.contains('get_$name'))
+			return Reflect.getProperty(this, name);
+		if (stageSprites.exists(name)) return stageSprites[name];
+		if (stageLayers.exists(name)) return stageLayers[name];
+		return null;
+	}
+
+	public function hset(name:String, val:Dynamic):Dynamic {
+		if (__instanceFields.contains(name) || __instanceFields.contains('set_$name')) {
+			Reflect.setProperty(this, name, val);
+			return val;
+		}
+		if (stageSprites.exists(name)) return stageSprites[name] = val;
+		if (stageLayers.exists(name)) return stageLayers[name] = val;
+		return null;
 	}
 	//endregion
 
@@ -373,13 +382,11 @@ class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
 
 	override function destroy() {
 		super.destroy();
+		FlxDestroyUtil.destroy(onAddSprite);
+		FlxDestroyUtil.destroy(onAddLayer);
 		_bounds = FlxDestroyUtil.put(_bounds);
-	}
-
-	private function transformMembers(func:FlxSprite -> Void) {
-		group.forEach((spr) -> {
-			func(spr);
-		});
+		stageSprites.clear();
+		stageLayers.clear();
 	}
 
 	override public function toString():String {
@@ -395,9 +402,43 @@ class Layer extends FlxTypedSpriteGroup<FlxSprite> implements IBeatReceiver {
 /**
  * A class that handles loading a stage and putting the sprites into the state.
  * 
+ * Usage example:
+ * 
+ * `myStage.xml`
+ * 
+ * ```xml
+ * <!DOCTYPE codename-engine-stage>
+ * <stage zoom="0.9" name="myStage" folder="stages/default/" startCamPosY="600" startCamPosX="1000">
+ * 	<layer name="background">
+ * 		<sprite name="bg" x="-600" y="-200" sprite="stageback" scroll="0.9" />
+ * 		<sprite name="stageFront" x="-600" y="600" sprite="stagefront" scroll="0.9" />
+ * 	</layer>
+ * 	<girlfriend />
+ * 	<dad />
+ * 	<boyfriend />
+ * 	<layer name="front">
+ * 		<sprite name="stageCurtains" x="-500" y="-300" sprite="stagecurtains" scroll="1.3" />
+ * 	</layer>
+ * </stage>
+ * ```
+ * `myStage.hx`
+ * 
+ * ```haxe
+ * function onSetup(stage:Stage):Bool {
+ * 	if(stage.xmlFile == null) return false; // don't load on fail.
+ * 	stage.onXMLLoaded = (_) -> {trace('stage parsed...');};
+ * 	stage.onXMLPostLoaded = (_, _) -> {trace('stage loaded');};
+ * 	return true;
+ * }
+ * var myStage = new Stage('myStage', onSetup);
+ * add(myStage);
+ * ```
+ * 
  * @author Jamextreme140 & ItsLJCool
 **/
 class Stage extends Layer {
+	private static final __instanceFields = Type.getInstanceFields(Stage);
+
 	private static final DEFAULT_ATTRIBUTES:Array<String> = ["name", "startCamPosX", "startCamPosY", "zoom", "folder"];
 
 	private static inline function getDefaultPos(name:String):StageCharPosInfo {
@@ -428,14 +469,16 @@ class Stage extends Layer {
 	public var extra:Map<String, String> = [];
 	public var startCam:FlxPoint = FlxPoint.get();
 
-	// Callbacks
+	//region Callbacks
 	public var onStageScriptLoad:Script -> Void;
-	public var onPostStageCreation:StageXMLEvent->Void;
+	//public var onPostStageCreation:StageXMLEvent->Void;
+	public var onPostStageCreation:DynamicEvent->Void;
 	
 	public var onPrepareInfo:Access -> XMLImportedScriptInfo;
 	public var onRemoveInfo:Script -> Void;
 	
-	public var onXMLLoaded:(StageXMLEvent)->Array<Access> = null;
+	//public var onXMLLoaded:(StageXMLEvent)->Array<Access> = null;
+	public var onXMLLoaded:(DynamicEvent)->Access = null;
 	public var onNodeInitalize:(Access)->Dynamic = null;
 	public var onNodeLoaded:(Access, Dynamic)->Dynamic = null;
 	public var onNodeFinished:(Access, Dynamic)->Void = null;
@@ -446,6 +489,7 @@ class Stage extends Layer {
 	
 	public var onStageDestroy:Stage -> Void;
 	public var onSilentDestroy:Script -> Void;
+	//endregion
 
 	private var characterPosLookup:Map<String, StageCharPos> = [];
 
@@ -459,7 +503,15 @@ class Stage extends Layer {
 		for (key=>ref in stageLayers) script.set(key, ref);
 	}
 
-	public function new(stage:String, load:Bool = false) {
+	/**
+	 * Creates a new stage with a provided file name and an optional `setup` callback
+	 * intented to be used for setting the rest of the callbacks like `onPostStageCreation`, `onRatingSet`, etc.
+	 * If `setup` callback is null, the stage won't load and you must call `loadStage` manually.
+	 * 
+	 * @param stage The Stage File name (`myStage.xml`)
+	 * @param setup Initial setup callback. Return `true` to load it upon creation.
+	 */
+	public function new(stage:String, ?setup:Stage -> Bool) {
 		super(stage);
 
 		fileName = stage;
@@ -470,10 +522,14 @@ class Stage extends Layer {
 			catch (e) Logs.trace('Couldn\'t load stage "$xmlFilePath": ${e.message}', ERROR);
 		}
 
-		if(load) loadStage();
+		onAddSprite.add((obj:FlxSprite) -> script?.call("onAddSprite", [obj]));
+		onAddLayer.add((layer:Layer) -> script?.call("onAddLayer", [layer]));
+
+		if(setup != null && setup(this)) loadStage();
 	}
 
-	private var stageEvent:StageXMLEvent;
+	//private var stageEvent:StageXMLEvent;
+	private var stageEvent:DynamicEvent;
 
 	public function loadStage(loadAll:Bool = false):Void {
 		if (hasLoaded) return;
@@ -484,12 +540,10 @@ class Stage extends Layer {
 			script.load();
 			script.call("create");
 			script.call("onStageLoad");
-
-			onAddSprite.add((obj:FlxSprite) -> script.call("onAddSprite", [obj]));
-			onAddLayer.add((layer:Layer) -> script.call("onAddLayer", [layer]));
 		}
 
 		if (xmlFile == null) {
+			this.name = fileName;
 			postLoadStage(null);
 			return;
 		}
@@ -497,7 +551,6 @@ class Stage extends Layer {
 		loadStartCam();
 
 		this.name = xmlFile.getAtt("name").getDefault(fileName);
-		//this.useRenderTexture = xmlFile.has.useRenderTexture ? xmlFile.att.useRenderTexture == "true" : false;
 
 		if (onStartCamSet != null) 
 			onStartCamSet(startCam, defaultZoom);
@@ -517,12 +570,13 @@ class Stage extends Layer {
 
 		if (onXMLLoaded != null) {
 			//stageEvent = EventManager.get(StageXMLEvent).recycle(this, xmlFile, data);
-			//data = onXMLLoaded(stageEvent);
+			stageEvent = EventManager.get(DynamicEvent).recycle(this, xmlFile, data);
+			data = onXMLLoaded(stageEvent);
 		}
 		
 		loadLayer(this, data);
 
-		//postLoadStage(elems);
+		postLoadStage(data);
 		script?.call("postCreate");
 		script?.call("onPostStageLoad");
 		hasLoaded = true;
@@ -551,7 +605,7 @@ class Stage extends Layer {
 					checkMemoryMode(node, loadAll); // recursive filter in layers
 			}
 
-			if (__isExtensionNode(node) && XMLImportedScriptInfo.shouldLoadBefore(node))
+			if (__isExtensionNode(node) && node.shouldLoadBefore())
 				if (onPrepareInfo != null) onPrepareInfo(node);
 		}
 	}
@@ -571,6 +625,15 @@ class Stage extends Layer {
 
 	private function loadLayer(layer:Layer, data:Access) {
 		var i:Int = 0; // local index count for Character setting
+
+		var curRemoved:Map<String, String> = [];
+		inline function tempRemove(xml:Xml, att:String) {
+			if (xml.exists(att)) {
+				curRemoved.set(att, xml.get(att));
+				xml.remove(att);
+			}
+		}
+
 		for(node in data.elements) {
 			// If `onNodeInitalize` returns a valid value, then why waste time on checking other values, 
 			// since we should only care about what the user sets it too. Optimizations be like:
@@ -581,8 +644,7 @@ class Stage extends Layer {
 						if (!node.has.name) continue;
 
 						var layerName:String = node.att.name;
-						//var renderLayer:Bool = node.has.useRenderTexture ? node.att.useRenderTexture == "true" : false;
-						var new_layer:Layer = new Layer(layerName/*, renderLayer*/);
+						var new_layer:Layer = new Layer(layerName, layer);
 						// recursive so it will allow nested layers
 						script?.call("onLoadLayer", [new_layer]);
 
@@ -606,18 +668,21 @@ class Stage extends Layer {
 						var w:Int = Std.parseInt(node.att.width);
 						var h:Int = Std.parseInt(node.att.height);
 						var c:flixel.util.FlxColor = (node.has.color) ? CoolUtil.getColorFromDynamic(node.att.color) : -1;
+						
 						if (isSolid)
-						{
 							spr.makeSolid(w, h, c);
-							node.x.remove("updateHitbox");
-						}
 						else
 							spr.makeGraphic(w, h, c);
+						
+						if(isSolid) tempRemove(node.x, "updateHitbox");
+						for (a in ["width", "height", "color"]) tempRemove(node.x, a);
 
-						node.x.remove("width");
-						node.x.remove("height");
-						node.x.remove("color");
 						XMLUtil.loadSpriteFromXML(spr, node, "", NONE, false);
+						// mainly for the stage editor
+						for (k => v in curRemoved)
+							node.x.set(k, v);
+						curRemoved.clear();
+
 						layer.addSprite(spr.name, spr);
 					case "boyfriend" | "bf" | "player":
 						setCharPos("boyfriend", node, getDefaultPos("boyfriend"), layer, i);
@@ -633,14 +698,14 @@ class Stage extends Layer {
 						if (onRatingSet == null)
 							continue;
 						onRatingSet(Std.parseFloat(node.getAtt("x")), Std.parseFloat(node.getAtt("y")));
-					case 'high-memory' | 'low-memory':
+					case 'high-memory' | 'low-memory': // those doesn't count as layers
 						loadLayer(layer, node);
 						null;
 					default:
 						// moved it to be like this, so we can just update the inline function - LJ
 						if (__isExtensionNode(node))
 						{
-							if (XMLImportedScriptInfo.shouldLoadBefore(node))
+							if (node.shouldLoadBefore())
 								continue;
 							if (onPrepareInfo != null && onPrepareInfo(node) == null)
 								continue;
@@ -650,7 +715,7 @@ class Stage extends Layer {
 			}
 
 			if (onNodeLoaded != null) {
-				var _prevSprite = sprite;
+				final _prevSprite = sprite;
 				sprite = onNodeLoaded(node, sprite);
 				// cleanup since there will be a random sprite floating around in memory
 				if (_prevSprite != sprite && _prevSprite != null) _prevSprite.destroy();
@@ -668,7 +733,7 @@ class Stage extends Layer {
 		}
 	}
 
-	private function postLoadStage(?data:Array<Access>) {
+	private function postLoadStage(?data:Access) {
 		for(defaultChar in ["girlfriend", "dad", "boyfriend"]) {
 			if (!characterPosLookup.exists(defaultChar))
 				setCharPos(defaultChar, null, getDefaultPos(defaultChar), this);
@@ -698,7 +763,7 @@ class Stage extends Layer {
 		}
 
 		if (xmlFile != null && onXMLPostLoaded != null) {
-			//data = onXMLPostLoaded(xmlFile, data);
+			data = onXMLPostLoaded(xmlFile, data);
 		}
 	}
 
@@ -773,7 +838,7 @@ class Stage extends Layer {
 		if(charPos != null && charPos.position != -1) {
 			charPos.prepareCharacter(char, id);
 			// allows setting characters in different layers
-			// their position (index) is relative to their layer - Jamextreme140
+			// their position (index) is relative to their layer
 			var layerRef:Layer = charPos.layer;
 			layerRef.insert(charPos.position, char);
 		}
@@ -805,6 +870,9 @@ class Stage extends Layer {
 		}
 
 		startCam.put();
+		for(k in characterPosLookup.keys())
+			FlxDestroyUtil.destroy(characterPosLookup.get(k));
+		characterPosLookup.clear();
 		
 		// Properly destroy the sprites here.
 		super.destroy();
@@ -815,6 +883,38 @@ class Stage extends Layer {
 		script?.call("destroy");
 		destroySilently();
 	}
+
+	//region IHScriptCustomBehaviour implementation
+	override function hget(name:String):Dynamic {
+		if (__instanceFields.contains(name) || __instanceFields.contains('get_$name'))
+			return Reflect.getProperty(this, name);
+
+		// We should check PlayState last, and check sub-layers before.
+		var og_val:Dynamic = super.hget(name);
+		if (og_val != null) return og_val;
+
+		if (PlayState.instance != null && (PlayState.__instanceFields.contains(name) || PlayState.__instanceFields.contains('get_$name')))
+			return Reflect.getProperty(PlayState.instance, name);
+		
+		return null;
+	}
+
+	override function hset(name:String, val:Dynamic):Dynamic {
+		if (__instanceFields.contains(name) || __instanceFields.contains('set_$name')) {
+			Reflect.setProperty(this, name, val);
+			return val;
+		}
+
+		var og_val:Dynamic = super.hget(name);
+		if (og_val != null) return og_val;
+
+		if (PlayState.instance != null && (PlayState.__instanceFields.contains(name) || PlayState.__instanceFields.contains('set_$name'))) {
+			Reflect.setProperty(PlayState.instance, name, val);
+			return val;
+		}
+		return null;
+	}
+	//endregion
 
 	// Backwards compatibility
 	public var stagePath(get, never):String;
@@ -829,7 +929,7 @@ class Stage extends Layer {
 	function get_stageName():String { return this.name; }
 	function set_stageName(name:String):String { return this.name = name; }
 	function get_characterPoses():Map<String, StageCharPos> { return this.characterPosLookup; }
-	inline function applyCharStuff(char:Character, posName:String, id:Float = 0) { return applyCharPos(char, posName, id); }
+	inline function applyCharStuff(char:Character, posName:String, id:Float = 0) { applyCharPos(char, posName, id); }
 }
 
 class StageCharPos extends FlxObject {
